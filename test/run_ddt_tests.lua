@@ -132,6 +132,16 @@ local function validate_stage(test, args)
                                  status, expected_status)
             return
         end
+
+        ok, res = schema.validate_only(test.schema[1], validate)
+        status          = ok and '<OK>' or res
+        expected_status = args.validate_error or '<OK>'
+        if status ~= expected_status then
+            test.FAILED = format('schema.validate: %q instead of %q',
+                                 status, expected_status)
+            return
+        end
+
         if args.validate_only or args.validate_error then test.PASSED = true end
     end
 end

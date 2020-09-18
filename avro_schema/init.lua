@@ -13,6 +13,7 @@ local insert, concat = table.insert, table.concat
 local base64_encode       = digest.base64_encode
 local f_create_schema     = front.create_schema
 local f_validate_data     = front.validate_data
+local f_validate_data_only= front.validate_data_only
 local f_create_ir         = front.create_ir
 local c_emit_code         = c.emit_code
 local il_create           = il.il_create
@@ -172,6 +173,10 @@ end
 
 local function validate(schema_handle, data)
     return f_validate_data(get_schema(schema_handle), data)
+end
+
+local function validate_only(schema_handle, data)
+    return f_validate_data_only(get_schema(schema_handle), data)
 end
 
 local function are_compatible(schema_h1, schema_h2, opt_mode)
@@ -529,6 +534,7 @@ return {
     get_types      = get_types,
     is             = is_schema,
     validate       = validate,
+    validate_only  = validate_only,
     export         = export,
     fingerprint    = get_fingerprint,
 }

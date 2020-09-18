@@ -935,6 +935,196 @@ copy_data = function(stack, schema, data, visited)
     end
 end
 
+local validate
+
+-- validate data against a schema without coping them
+validate = function(stack, schema, data, visited)
+    local schematype = type(schema) == 'string' and schema or schema.type
+    -- primitives
+    -- Note: sometimes we don't check the type explicitly, but instead
+    -- rely on an operation to fail on a wrong type. Done with integer
+    -- and fp types, also with tables.
+    -- Due to this technique, a error message is often misleading,
+    -- e.x. "attempt to perform arithmetic on a string value". Unless
+    -- a message starts with '@', we replace it (see copy_data_eh).
+    if schema.nullable and (data == nil) then
+        return null
+    end
+    if     schematype == 'null' then
+        if data ~= null then
+            -- The stack push/pop should be called rarely to improve
+            -- speed.
+            stack.push(schema, data)
+            error()
+        end
+        return
+    elseif schematype == 'boolean' then
+        if type(data) ~= 'boolean' then
+            stack.push(schema, data)
+            error()
+        end
+        return
+    elseif schematype == 'int' then
+        -- Error may occur during comparison.
+        stack.push(schema, data)
+        if data < -2147483648 or data > 2147483647 or floor(tonumber(data)) ~= data then
+            error()
+        end
+        stack.remove_last()
+        return
+    elseif schematype == 'long' then
+        local n = tonumber(data)
+        if not n then
+            stack.push(schema, data)
+            error()
+        end
+        -- note: if it's not a number or cdata(numbertype),
+        --       the expression below will raise
+        -- note: boundaries were carefully picked to avoid
+        --       rounding errors, they are INT64_MIN and INT64_MAX+1,
+        --       respectively (both 2**k)
+        if n < -9223372036854775808 or n >= 9223372036854775808 or
+           floor(n) ~= n then
+            -- due to rounding errors, INT64_MAX-1023..INT64_MAX
+            -- fails the range check above, check explicitly for this
+            -- case; in number > cdata(uint64_t) expression, number
+            -- is implicitly coerced to uint64_t
+            if n ~= 9223372036854775808 or data > 9223372036854775807ULL then
+                stack.push(schema, data)
+                error()
+            end
+        end
+        return
+    elseif schematype == 'double' or schematype == 'float' then
+        local xtype = type(data)
+        if xtype == "number" then
+            return
+        else
+            if xtype == "cdata" then
+                local xdata = tonumber(data)
+                if xdata == nil then
+                    -- `tonumber` returns `nil` in case of an error
+                    -- crutch: replace data with typeof(data) to produce more
+                    -- readable error message
+                    stack.push(schema, ffi.typeof(data))
+                    error()
+                else
+                    return
+                end
+            end
+        end
+        stack.push(schema, data)
+        error()
+    elseif schematype == 'bytes' or schematype == 'string' then
+        if type(data) ~= 'string' then
+            stack.push(schema, data)
+            error()
+        end
+        return
+    elseif schematype == 'enum' then
+        if not get_enum_symbol_map(schema)[data] then
+            stack.push(schema, data)
+            error()
+        end
+        return
+    elseif schematype == 'fixed' then
+        if type(data) ~= 'string' or #data ~= schema.size then
+            stack.push(schema, data)
+            error()
+        end
+        return
+    else
+        stack.push(schema, data)
+        local frame_no = stack.len
+        -- Replace nil -> NULL to allow it to be a key in a table.
+        data = data ~= nil and data or null
+        if visited[data] then
+            error('@Infinite loop detected in the data', 0)
+        end
+        visited[data] = true
+        -- record, enum, array, map, fixed
+        if     schematype == 'record' then
+            local fieldmap = get_record_field_map(schema)
+            -- check if the data contains unknown fields
+            for k, _ in pairs(data) do
+                stack.ptr[frame_no] = k
+                local field = schema.fields[fieldmap[k]]
+                if not field or field.name ~= k then
+                    error('@Unknown field', 0)
+                end
+                stack.ptr[frame_no] = nil
+            end
+            -- validate data
+            for _, field in ipairs(schema.fields) do
+                if data[field.name] ~= nil then
+                    -- a field is present in data
+                    stack.ptr[frame_no] = field.name
+                    validate(stack, field.type, data[field.name], visited)
+                    stack.ptr[frame_no] = nil
+                    -- default value defined
+                elseif type(field.default) == 'nil' and
+                    -- value is nullable
+                        not (field.type and field.type.nullable) and
+                    -- value is nullable union
+                        not (field.type and type(field.type) == 'table' and
+                                #field.type > 0 and get_union_tag_map(field.type)['null']) then
+                    error(format('@Field %s missing', field.name), 0)
+                end
+            end
+        elseif schematype == 'array'  then
+            for i, v in pairs(data) do
+                stack.ptr[frame_no] = i
+                if type(i) ~= 'number' then
+                    error('@Non-number array key', 0)
+                end
+                validate(stack, schema.items, v, visited)
+            end
+        elseif schematype == 'map'    then
+            for k, v in pairs(data) do
+                stack.ptr[frame_no] = k
+                if type(k) ~= 'string' then
+                    error('@Non-string map key', 0)
+                end
+                validate(stack, schema.values, v, visited)
+            end
+        elseif not schematype then -- union
+            local tagmap = get_union_tag_map(schema)
+            if data == null then
+                if not tagmap['null'] then
+                    error('@Unexpected type in union: null', 0)
+                end
+            else
+                local k, v = next(data)
+                local bpos = tagmap[k]
+                stack.ptr[frame_no] = k
+                if not bpos then
+                    error('@Unexpected key in union', 0)
+                end
+                validate(stack, schema[bpos], v, visited)
+                local ptr = next(data, k)
+                stack.ptr[frame_no] = ptr
+                if ptr then
+                    error('@Unexpected key in union', 0)
+                end
+            end
+        elseif schematype == 'any' then
+            if type(data) == 'table' then
+                for k, v in pairs(data) do
+                    stack.ptr[frame_no] = k
+                    if type(k) == 'table' then
+                        error('@Invalid key', 0)
+                    end
+                    validate(stack, 'any', v, visited)
+                end
+            end
+        else
+            assert(false)
+        end
+        visited[data] = nil
+        stack.remove_last()
+    end
+end
+
 -- extract from the call stack a path to the fragment that failed
 -- validation; enhance error message
 local function copy_data_eh(stack, err)
@@ -961,6 +1151,15 @@ end
 local vd_prepopulated_stack = utils.init_fstack({'schema', 'data', 'ptr'})
 local function validate_data(schema, data)
     local ok, data = pcall(copy_data, vd_prepopulated_stack, schema, data, {})
+    if not ok then
+        data = copy_data_eh(vd_prepopulated_stack, data)
+    end
+    vd_prepopulated_stack.clear()
+    return ok, data
+end
+
+local function validate_data_only(schema, data)
+    local ok, data = pcall(validate, vd_prepopulated_stack, schema, data, {})
     if not ok then
         data = copy_data_eh(vd_prepopulated_stack, data)
     end
@@ -1431,6 +1630,7 @@ end
 return {
     create_schema         = create_schema,
     validate_data         = validate_data,
+    validate_data_only    = validate_data_only,
     create_ir             = create_ir,
     get_enum_symbol_map   = get_enum_symbol_map,
     get_union_tag_map     = get_union_tag_map,

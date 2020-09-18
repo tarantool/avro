@@ -85,6 +85,7 @@ local testcases = {
     { "msgpack(lua t)"      , msgpack.encode      , data }       ,
     { "msgpackdecode(mp)"   , msgpack.decode      , data_mp }    ,
     { "validate(lua t)"     , avro.validate       , person       , data } ,
+    { "validate_only(lua t)", avro.validate_only  , person       , data } ,
     { "flatten(lua t)"      , c.flatten           , data }       ,
     { "flatten(mp)"         , c.flatten           , data_mp }    ,
     { "unflatten(lua t)"    , c.unflatten         , data_fl }    ,
