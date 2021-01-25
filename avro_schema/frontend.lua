@@ -847,12 +847,11 @@ copy_data = function(stack, schema, data, visited)
             local fieldmap = get_record_field_map(schema)
             -- check if the data contains unknown fields
             for k, _ in pairs(data) do
-                stack.ptr[frame_no] = k
                 local field = schema.fields[fieldmap[k]]
                 if not field or field.name ~= k then
+                    stack.ptr[frame_no] = k
                     error('@Unknown field', 0)
                 end
-                stack.ptr[frame_no] = nil
             end
             -- copy data
             for _, field in ipairs(schema.fields) do
