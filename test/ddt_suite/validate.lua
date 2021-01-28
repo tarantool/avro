@@ -133,6 +133,12 @@ t {
     validate_error = 'Not a long: 9223372036854775808ULL'
 }
 
+t {
+    schema = '"long"',
+    validate = '"42"',
+    validate_error = 'Not a long: 42'
+}
+
 -- note: IEEE 754 double precision floating-point numbers encode
 --       fraction with 52 bits, hence when the value is 2^63,
 --       the delta must be at least 2^11 (2048) to make a difference.

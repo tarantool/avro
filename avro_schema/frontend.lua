@@ -772,7 +772,10 @@ copy_data = function(stack, schema, data, visited)
         stack.remove_last()
         return data
     elseif schematype == 'long' then
-        local n = tonumber(data)
+        local n
+        if type(data) == 'number' or type(data) == 'cdata' then
+            n = tonumber(data)
+        end
         if not n then
             stack.push(schema, data)
             error()
